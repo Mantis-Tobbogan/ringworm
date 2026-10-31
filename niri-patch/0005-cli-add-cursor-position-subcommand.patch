@@ -1,0 +1,64 @@
+From d7bba48cb3383726b45a751c70de3c1745e672a0 Mon Sep 17 00:00:00 2001
+From: mantis-tobbogan <dhanu.andre.legend@gmail.com>
+Date: Sat, 31 Oct 2026 18:37:35 +0530
+Subject: [PATCH 5/5] cli: add cursor-position subcommand
+
+niri msg cursor-position prints "x, y" (or JSON with --json), mirroring
+hyprctl cursorpos so scripts can be portable.
+---
+ src/cli.rs        |  2 ++
+ src/ipc/client.rs | 18 ++++++++++++++++++
+ 2 files changed, 20 insertions(+)
+
+diff --git a/src/cli.rs b/src/cli.rs
+index 308b312..aa40af4 100644
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -109,6 +109,8 @@ pub enum Msg {
+     OverviewState,
+     /// List screencasts.
+     Casts,
++    /// Print the current cursor position.
++    CursorPosition,
+ }
+ 
+ #[derive(Clone, Debug, clap::ValueEnum)]
+diff --git a/src/ipc/client.rs b/src/ipc/client.rs
+index 40a58ef..32b868f 100644
+--- a/src/ipc/client.rs
++++ b/src/ipc/client.rs
+@@ -49,6 +49,7 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
+         Msg::RequestError => Request::ReturnError,
+         Msg::OverviewState => Request::OverviewState,
+         Msg::Casts => Request::Casts,
++        Msg::CursorPosition => Request::CursorPosition,
+     };
+ 
+     let mut socket = Socket::connect().context("error connecting to the niri socket")?;
+@@ -550,6 +551,23 @@ pub fn handle_msg(mut msg: Msg, json: bool) -> anyhow::Result<()> {
+                 println!();
+             }
+         }
++        Msg::CursorPosition => {
++            let Response::CursorPosition(position) = response else {
++                bail!("unexpected response: expected CursorPosition, got {response:?}");
++            };
++
++            if json {
++                let position =
++                    serde_json::to_string(&position).context("error formatting response")?;
++                println!("{position}");
++                return Ok(());
++            }
++
++            match position {
++                Some((x, y)) => println!("{x:.1}, {y:.1}"),
++                None => println!("no cursor position known"),
++            }
++        }
+     }
+ 
+     Ok(())
+-- 
+2.56.0
+

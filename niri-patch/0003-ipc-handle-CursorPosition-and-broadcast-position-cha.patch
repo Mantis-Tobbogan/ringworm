@@ -1,0 +1,96 @@
+From a716c7be7715d1fbf2530e0a30d62ca7335bda75 Mon Sep 17 00:00:00 2001
+From: mantis-tobbogan <dhanu.andre.legend@gmail.com>
+Date: Sat, 31 Oct 2026 18:37:35 +0530
+Subject: [PATCH 3/5] ipc: handle CursorPosition and broadcast position changes
+
+The request reads the live pointer location from the seat on the event loop
+(like Layers), not the event-stream snapshot, so a query is always exact.
+The emitter updates the tracked state (so new event-stream clients get the
+current position up-front) and broadcasts the change, throttled to 250 Hz.
+---
+ src/ipc/server.rs | 55 +++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 55 insertions(+)
+
+diff --git a/src/ipc/server.rs b/src/ipc/server.rs
+index db71da6..7dd2fed 100644
+--- a/src/ipc/server.rs
++++ b/src/ipc/server.rs
+@@ -5,6 +5,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
+ use std::path::{Path, PathBuf};
+ use std::rc::Rc;
+ use std::sync::{Arc, Mutex};
++use std::time::{Duration, Instant};
+ use std::{env, io, process};
+ 
+ use anyhow::Context;
+@@ -455,6 +456,19 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
+             let casts = state.casts.casts.values().cloned().collect();
+             Response::Casts(casts)
+         }
++        Request::CursorPosition => {
++            let (tx, rx) = async_channel::bounded(1);
++            ctx.event_loop.insert_idle(move |state| {
++                let position = state.niri.seat.get_pointer().map(|pointer| {
++                    let pos = pointer.current_location();
++                    (pos.x, pos.y)
++                });
++                let _ = tx.send_blocking(position);
++            });
++            let result = rx.recv().await;
++            let position = result.map_err(|_| String::from("error getting cursor position"))?;
++            Response::CursorPosition(position)
++        }
+     };
+ 
+     Ok(response)
+@@ -557,6 +571,47 @@ impl State {
+         server.send_event(event);
+     }
+ 
++    /// Updates the tracked cursor position and broadcasts it to event stream clients.
++    ///
++    /// Motion events can arrive at very high rates, so the events are throttled: at most one is
++    /// sent every `MIN_INTERVAL`. The last position within an interval can be lost, which is
++    /// invisible in practice (the position converges with the next motion event).
++    /// Updates the tracked cursor position and broadcasts it to event stream clients.
++    ///
++    /// Motion events can arrive at very high rates, so the events are throttled: at most one is
++    /// sent every `MIN_INTERVAL`. The last position within an interval can be lost, which is
++    /// invisible in practice (the position converges with the next motion event).
++    pub fn ipc_cursor_position_changed(&mut self) {
++        const MIN_INTERVAL: Duration = Duration::from_millis(4);
++
++        let now = Instant::now();
++        if let Some(last) = self.niri.ipc_cursor_position_last_sent {
++            if now.duration_since(last) < MIN_INTERVAL {
++                return;
++            }
++        }
++
++        let Some(pointer) = self.niri.seat.get_pointer() else {
++            return;
++        };
++        let pos = pointer.current_location();
++
++        self.niri.ipc_cursor_position_last_sent = Some(now);
++
++        let Some(server) = &self.niri.ipc_server else {
++            return;
++        };
++
++        let mut state = server.event_stream_state.borrow_mut();
++        let state = &mut state.cursor_position;
++
++        let event = Event::CursorPositionChanged {
++            position: (pos.x, pos.y),
++        };
++        state.apply(event.clone());
++        server.send_event(event);
++    }
++
+     pub fn ipc_refresh_keyboard_layout_index(&mut self) {
+         let keyboard = self.niri.seat.get_keyboard().unwrap();
+         let idx = keyboard.with_xkb_state(self, |context| {
+-- 
+2.56.0
+

@@ -1,0 +1,36 @@
+From 712a2583c60cad595f9e305ed97265832d648228 Mon Sep 17 00:00:00 2001
+From: mantis-tobbogan <dhanu.andre.legend@gmail.com>
+Date: Sat, 31 Oct 2026 18:37:35 +0530
+Subject: [PATCH 2/5] niri: track the last cursor-position IPC send time
+
+Needed to throttle position broadcasts; pointer motion can arrive at 1 kHz
+and the event stream does not need (or want) that rate.
+---
+ src/niri.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/niri.rs b/src/niri.rs
+index ec40e01..24b6ffd 100644
+--- a/src/niri.rs
++++ b/src/niri.rs
+@@ -408,6 +408,9 @@ pub struct Niri {
+     pub inhibit_power_key_fd: Option<zbus::zvariant::OwnedFd>,
+ 
+     pub ipc_server: Option<IpcServer>,
++
++    /// Last time the cursor position was sent over IPC, for throttling.
++    pub ipc_cursor_position_last_sent: Option<Instant>,
+     pub ipc_outputs_changed: bool,
+ 
+     pub satellite: Option<Satellite>,
+@@ -2619,6 +2622,7 @@ impl Niri {
+             inhibit_power_key_fd: None,
+ 
+             ipc_server,
++            ipc_cursor_position_last_sent: None,
+             ipc_outputs_changed: false,
+ 
+             satellite: None,
+-- 
+2.56.0
+

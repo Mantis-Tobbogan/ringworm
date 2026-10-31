@@ -1,0 +1,116 @@
+From 25935a31736028a9166bf758e54e3d82c03a7308 Mon Sep 17 00:00:00 2001
+From: mantis-tobbogan <dhanu.andre.legend@gmail.com>
+Date: Sat, 31 Oct 2026 18:37:35 +0530
+Subject: [PATCH 1/5] niri-ipc: add CursorPosition request and
+ CursorPositionChanged event
+
+Clients cannot see the global pointer position on Wayland, which makes
+cursor-following tools (accessibility highlights, screen-share helpers)
+impossible. Expose it: a CursorPosition request returning the live location,
+and a CursorPositionChanged event carried on the event stream, including in
+the up-front state snapshot.
+---
+ niri-ipc/src/lib.rs   | 12 ++++++++++++
+ niri-ipc/src/state.rs | 31 +++++++++++++++++++++++++++++++
+ 2 files changed, 43 insertions(+)
+
+diff --git a/niri-ipc/src/lib.rs b/niri-ipc/src/lib.rs
+index 0aa3cb4..da3ef9a 100644
+--- a/niri-ipc/src/lib.rs
++++ b/niri-ipc/src/lib.rs
+@@ -119,6 +119,11 @@ pub enum Request {
+     OverviewState,
+     /// Request information about screencasts.
+     Casts,
++    /// Request the current cursor position.
++    ///
++    /// Returns `None` if the cursor position is not known (for example, no pointer device has
++    /// sent motion yet).
++    CursorPosition,
+ }
+ 
+ /// Reply from niri to client.
+@@ -165,6 +170,8 @@ pub enum Response {
+     OverviewState(Overview),
+     /// Information about screencasts.
+     Casts(Vec<Cast>),
++    /// The current cursor position.
++    CursorPosition(Option<(f64, f64)>),
+ }
+ 
+ /// Overview information.
+@@ -1705,6 +1712,11 @@ pub enum Event {
+         /// Stream ID of the stopped screencast.
+         stream_id: u64,
+     },
++    /// The cursor position changed.
++    CursorPositionChanged {
++        /// The new cursor position in global (logical) coordinates.
++        position: (f64, f64),
++    },
+ }
+ 
+ impl From<Duration> for Timestamp {
+diff --git a/niri-ipc/src/state.rs b/niri-ipc/src/state.rs
+index b603dfc..f872ced 100644
+--- a/niri-ipc/src/state.rs
++++ b/niri-ipc/src/state.rs
+@@ -49,6 +49,9 @@ pub struct EventStreamState {
+ 
+     /// State of screencasts.
+     pub casts: CastsState,
++
++    /// State of the cursor position.
++    pub cursor_position: CursorPositionState,
+ }
+ 
+ /// The workspaces state communicated over the event stream.
+@@ -102,6 +105,7 @@ impl EventStreamStatePart for EventStreamState {
+         events.extend(self.overview.replicate());
+         events.extend(self.config.replicate());
+         events.extend(self.casts.replicate());
++        events.extend(self.cursor_position.replicate());
+         events
+     }
+ 
+@@ -112,6 +116,7 @@ impl EventStreamStatePart for EventStreamState {
+         let event = self.overview.apply(event)?;
+         let event = self.config.apply(event)?;
+         let event = self.casts.apply(event)?;
++        let event = self.cursor_position.apply(event)?;
+         Some(event)
+     }
+ }
+@@ -321,3 +326,29 @@ impl EventStreamStatePart for CastsState {
+         None
+     }
+ }
++
++/// The cursor position state communicated over the event stream.
++#[derive(Debug, Default)]
++pub struct CursorPositionState {
++    /// The last known cursor position.
++    pub position: Option<(f64, f64)>,
++}
++
++impl EventStreamStatePart for CursorPositionState {
++    fn replicate(&self) -> Vec<Event> {
++        match self.position {
++            Some(position) => vec![Event::CursorPositionChanged { position }],
++            None => vec![],
++        }
++    }
++
++    fn apply(&mut self, event: Event) -> Option<Event> {
++        match event {
++            Event::CursorPositionChanged { position } => {
++                self.position = Some(position);
++            }
++            event => return Some(event),
++        }
++        None
++    }
++}
+-- 
+2.56.0
+

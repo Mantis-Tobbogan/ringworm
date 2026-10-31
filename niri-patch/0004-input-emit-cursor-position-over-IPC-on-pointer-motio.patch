@@ -1,0 +1,37 @@
+From 16e2f49b1baa564ce1cb77a379a36646f065b9df Mon Sep 17 00:00:00 2001
+From: mantis-tobbogan <dhanu.andre.legend@gmail.com>
+Date: Sat, 31 Oct 2026 18:37:35 +0530
+Subject: [PATCH 4/5] input: emit cursor position over IPC on pointer motion
+
+Hooks both relative and absolute motion handlers. Pointer warps that bypass
+motion events will be picked up by the next motion; acceptable for the
+use case.
+---
+ src/input/mod.rs | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index f1ad493..d513d78 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -2633,6 +2633,8 @@ impl State {
+         // Redraw to update the cursor position.
+         // FIXME: redraw only outputs overlapping the cursor.
+         self.niri.queue_redraw_all();
++
++        self.ipc_cursor_position_changed();
+     }
+ 
+     fn on_pointer_motion_absolute<I: InputBackend>(
+@@ -2731,6 +2733,8 @@ impl State {
+         // Redraw to update the cursor position.
+         // FIXME: redraw only outputs overlapping the cursor.
+         self.niri.queue_redraw_all();
++
++        self.ipc_cursor_position_changed();
+     }
+ 
+     fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
+-- 
+2.56.0
+
