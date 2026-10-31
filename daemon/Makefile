@@ -1,10 +1,13 @@
 WAYLAND := $(shell pkg-config --cflags wayland-client) -I.
 LDLIBS := $(shell pkg-config --libs wayland-client) -lm
 
-CFLAGS ?= -O2 -std=c11 -Wall -Wextra
+CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Werror
 PROTO := ../protocol
 
 all: ringworm
+
+install: ringworm
+	install -Dm755 ringworm $(HOME)/.local/bin/ringworm
 
 layer-shell.h: $(PROTO)/wlr-layer-shell-unstable-v1.xml
 	wayland-scanner client-header $< $@

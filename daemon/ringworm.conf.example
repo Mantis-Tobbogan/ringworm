@@ -1,0 +1,23 @@
+# Ringworm — example configuration
+#
+# Copy to ~/.config/ringworm/ringworm.conf, then edit and run
+# `ringworm reload` — changes apply live, no restart needed.
+# Missing keys fall back to the defaults shown here.
+
+# Ring size, px to the ring centerline.
+radius = 16
+
+# Ring stroke width, px.
+thickness = 3
+
+# Soft halo width outside the ring, px (0 disables the glow).
+glow = 6
+
+# Ring color, hex RRGGBB.
+color = ffb000
+
+# Overall opacity, percent (1-100).
+alpha = 70
+
+# Fade in/out duration, ms (0 = instant).
+fade_ms = 150
