@@ -1,9 +1,10 @@
-# Build artifacts
 daemon/ringworm
 daemon/*.o
+daemon/layer-shell.*
+daemon/xdg-shell.*
 niri/
+scripts/virtmouse
+scripts/virtual-pointer.*
 *.patch.new
-
-# Scratch
 *.log
 result/
