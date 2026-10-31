@@ -65,7 +65,9 @@ binds {
 }
 ```
 
-Log out and back in. Ring on.
+Log out and back in. The daemon waits in the background — the ring appears
+only when you summon it with `Shift+F12` (or `ringworm on`; set
+`enabled = yes` in the config if you prefer it always-on).
 
 ## Configuration
 
@@ -80,6 +82,7 @@ changes apply live.
 | `color` | `ffb000` | hex RRGGBB |
 | `alpha` | 70 | overall opacity percent |
 | `fade_ms` | 150 | fade in/out duration |
+| `enabled` | `no` | ring visible at startup; `yes` turns it on automatically |
 
 ## CLI
 

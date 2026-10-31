@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -42,6 +43,10 @@
 static int g_verbose;
 #define logv(...) do { if (g_verbose) fprintf(stderr, "ringworm: " __VA_ARGS__); } while (0)
 #define loge(...) do { fprintf(stderr, "ringworm: " __VA_ARGS__); } while (0)
+
+/* runtime state flags shared with the config parser */
+static bool g_enabled = false;    /* ring hidden until invoked (config/keybind) */
+static bool g_fake;               /* --fake: sine-wave demo mode */
 
 struct config {
 	int radius;      /* logical px to the ring centerline */
@@ -65,6 +70,12 @@ static void cfg_apply(const char *key, const char *val) {
 	else if (!strcmp(key, "glow")) cfg.glow = clampi(atoi(val), 0, 200);
 	else if (!strcmp(key, "alpha")) cfg.alpha = clampi(atoi(val), 1, 100);
 	else if (!strcmp(key, "fade_ms")) cfg.fade_ms = clampi(atoi(val), 0, 2000);
+	else if (!strcmp(key, "enabled")) {
+		/* the ring stays hidden after boot unless the config or the keybind
+		 * turns it on; accepting several spellings keeps the file friendly */
+		g_enabled = !strcmp(val, "1") || !strcasecmp(val, "yes") ||
+			!strcasecmp(val, "true") || !strcasecmp(val, "on");
+	}
 	else if (!strcmp(key, "color")) {
 		char *end = NULL;
 		unsigned long v = strtoul(val, &end, 16);
@@ -191,8 +202,6 @@ static bool js_pair(const char *arr, double *x, double *y) {
 /* ------------------------------------------------------------------ */
 /* shared runtime state                                                */
 
-static bool g_enabled = true;     /* user toggle */
-static bool g_fake;               /* --fake: sine-wave position for demos/tests */
 static double g_alpha = 0.0;      /* animated 0..1 */
 static double g_px, g_py;         /* latest global logical position */
 static bool g_pos_valid;
@@ -825,7 +834,7 @@ int main(int argc, char **argv) {
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(stdout); return 0; }
 		if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) { g_verbose = 1; continue; }
-		if (!strcmp(argv[i], "--fake")) { g_fake = true; continue; }
+		if (!strcmp(argv[i], "--fake")) { g_fake = true; g_enabled = true; continue; }
 		if (!strcmp(argv[i], "toggle") || !strcmp(argv[i], "on") || !strcmp(argv[i], "off") ||
 			!strcmp(argv[i], "status") || !strcmp(argv[i], "reload") || !strcmp(argv[i], "stop"))
 			return client_main(argv[i]);

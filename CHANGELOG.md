@@ -12,6 +12,9 @@ First working release.
   single-instance enforcement, output hotplug support.
 - Liveness redesign: no writes after event-stream subscription; the
   connection is the heartbeat (see ADR 0005).
+- The ring starts hidden at boot/login; it appears only when invoked
+  (keybind or `ringworm on`). `enabled = yes` in the config restores
+  always-on behavior.
 - `scripts/virtmouse`: unattended acceptance testing via virtual pointer.
 - License split: MIT for the daemon and scripts, GPL-3.0-or-later for the
   niri patch series.

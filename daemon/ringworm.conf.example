@@ -21,3 +21,8 @@ alpha = 70
 
 # Fade in/out duration, ms (0 = instant).
 fade_ms = 150
+
+# Whether the ring is visible right after the daemon starts.
+# "no" = hidden at boot/login; press the toggle keybind (or `ringworm on`)
+# to show it. "yes" = ring on from startup.
+enabled = no
