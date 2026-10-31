@@ -2,6 +2,8 @@
  * implements zwlr_virtual_pointer (niri does). Verification tool: drives the
  * cursor without a human so acceptance tests can run unattended.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * usage: virtmouse <x> <y> [x_extent] [y_extent]
  * extent defaults to 1000x1000; coordinates are within that extent.
  */

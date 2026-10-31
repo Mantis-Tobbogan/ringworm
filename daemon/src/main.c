@@ -1,5 +1,7 @@
 /* ringworm — accessibility ring around the cursor for niri.
  *
+ * SPDX-License-Identifier: MIT
+ *
  * A click-through wlr-layer-shell overlay drawn on the top layer of every
  * output, fed by niri's IPC event stream (requires the cursor-position patch
  * in ../niri-patch/). Toggle with `ringworm toggle`.
@@ -525,6 +527,17 @@ static const struct wl_registry_listener registry_listener = {
 };
 
 /* ------------------------------------------------------------------ */
+/* unix sockets                                                        */
+
+/* sockaddr_un.sun_path holds at most 107 chars + NUL; reject longer. */
+static bool saun_fill(struct sockaddr_un *addr, const char *path) {
+	if (strlen(path) >= sizeof addr->sun_path) return false;
+	addr->sun_family = AF_UNIX;
+	strcpy(addr->sun_path, path);
+	return true;
+}
+
+/* ------------------------------------------------------------------ */
 /* niri IPC feed                                                       */
 
 static int ipc_fd = -1;
@@ -578,8 +591,12 @@ static void ipc_connect(void) {
 	}
 	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 	if (fd < 0) return;
-	struct sockaddr_un addr = { .sun_family = AF_UNIX };
-	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path);
+	struct sockaddr_un addr;
+	if (!saun_fill(&addr, path)) {
+		loge("ipc socket path too long: %s\n", path);
+		ipc_retry_at = mono_ms() + 1000;
+		return;
+	}
 	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
 		if (++ipc_connect_failures % 5 == 1)
 			logv("ipc connect to %s failed: %s\n", path, strerror(errno));
@@ -669,8 +686,12 @@ static void ctl_listen(void) {
 	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
 	if (fd < 0) return;
 
-	struct sockaddr_un addr = { .sun_family = AF_UNIX };
-	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", ctl_path);
+	struct sockaddr_un addr;
+	if (!saun_fill(&addr, ctl_path)) {
+		loge("control socket path too long: %s\n", ctl_path);
+		close(fd);
+		return;
+	}
 	if (bind(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
 		if (errno == EADDRINUSE) {
 			/* someone else's socket: if it answers, we are the second copy */
@@ -758,8 +779,12 @@ static int client_main(const char *cmd) {
 	snprintf(path, sizeof path, "%s/ringworm.sock", runtime);
 	int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
 	if (fd < 0) { loge("socket: %s\n", strerror(errno)); return 1; }
-	struct sockaddr_un addr = { .sun_family = AF_UNIX };
-	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path);
+	struct sockaddr_un addr;
+	if (!saun_fill(&addr, path)) {
+		loge("socket path too long: %s\n", path);
+		close(fd);
+		return 1;
+	}
 	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
 		loge("daemon not running (%s)\n", path);
 		close(fd);
