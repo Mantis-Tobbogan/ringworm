@@ -79,6 +79,25 @@ never leaves a lying ring on screen.
 | M4 | Toggle + autostart + robustness | Shift+F12 toggles; survives output hotplug (HDMI script); feed-stall fades ring; single instance enforced |
 | M5 | Open-source polish | MIT license, README with demo GIF, `scripts/build-niri.sh` reproducible against pinned tag, patch series PR-ready |
 
+### notes (implemented, M1+M2 core)
+
+- M1 ✅ patch series builds clean against v26.04; `niri msg cursor-position`
+  returns live coords, `--json` prints `[x,y]`; event-stream pushes
+  `CursorPositionChanged`; verified nested via injected virtual pointer
+  (virtmouse (700,600) → compositor 651.0,646.2 → daemon identical).
+- M2 ✅ core verified the same way: daemon overlays every output, ring tracks
+  the feed live; CLI control plane works (`status`, `stop`).
+- Wire-protocol lesson: never hand-trim a Wayland XML — request opcodes are
+  positional and get_popup sits mid-sequence. Canonical XML is vendored from
+  the wayland-protocols crates; xdg-shell is linked for symbol closure only.
+- Feed liveness redesigned while wiring: a resting cursor produces no events,
+  so liveness is heartbeat-based (ping every 1s, stale at 3s of silence), not
+  event-based. Position events are push-only; the pointer is never polled.
+- Nested-session note: pointer-enter without motion gives a position via the
+  request but no event until the first real motion; invisible in practice.
+- The `niri msg event-stream` printer needed an arm for the new event (exhaustive
+  match); folded into the cli patch.
+
 Order note: M1 is first after scaffold because it's the only true unknown and
 everything else is testable against it. The daemon has a headless seam (it can
 log positions from the IPC feed with `--no-render`) so M1 acceptance and daemon
