@@ -1,0 +1,9 @@
+# Build artifacts
+daemon/ringworm
+daemon/*.o
+niri/
+*.patch.new
+
+# Scratch
+*.log
+result/
