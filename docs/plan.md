@@ -1,7 +1,7 @@
 # Plan
 
-Status: **DRAFT — awaiting owner lock.** Changes after lock require a new
-discussion.
+Status: **LOCKED — agreed between user and implementer. Changes require a new
+discussion.**
 
 ## Vision
 
