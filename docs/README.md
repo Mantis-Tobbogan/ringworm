@@ -17,3 +17,4 @@ Every file answers exactly one kind of question.
 | [0002](adr/0002-layer-shell-overlay-renderer.md) | Ring renders as a click-through wlr-layer-shell top-layer overlay | Accepted |
 | [0003](adr/0003-toggle-via-unix-socket-and-niri-bind.md) | Toggle = niri keybind → one-shot CLI over a daemon unix socket | Accepted |
 | [0004](adr/0004-daemon-in-c-no-cairo-egl.md) | Daemon is C11 + libwayland-client only; Rust lives only in the niri patch | Accepted |
+| [0005](adr/0005-liveness-is-the-connection.md) | No heartbeats; liveness is the connection itself | Accepted |

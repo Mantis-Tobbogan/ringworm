@@ -5,39 +5,51 @@ live in `docs/`.
 
 ## Commands
 
-- Build daemon: `make -C daemon` → `daemon/ringworm`
-- Run daemon (foreground, verbose): `daemon/ringworm -v`
+- Build daemon: `make -C daemon` → `daemon/ringworm` (builds with `-Werror`)
+- Install daemon: `make -C daemon install` → `~/.local/bin/ringworm`
+- Run daemon (foreground, verbose): `ringworm -v`
 - Toggle/status/stop: `ringworm toggle | on | off | status | reload | stop`
+- Config: `~/.config/ringworm/ringworm.conf` (see
+  `daemon/ringworm.conf.example`), live-applied by `ringworm reload`
 - Verify overlay exists: `niri msg layers | grep ringworm`
-- Build patched niri (M1+): `scripts/build-niri.sh` (clones upstream, applies
-  `niri-patch/*.patch`, builds — needs rust toolchain)
+- Build patched niri: `scripts/build-niri.sh` (clones the pinned tag, applies
+  `niri-patch/*.patch`, builds — needs the Rust toolchain; deps listed in the
+  script header)
 - Verify patch: `niri msg cursor-position` (coords must track the live pointer)
+- Unattended testing: `scripts/virtmouse x y` injects pointer motion via
+  `zwlr_virtual_pointer`
 
 ## Architecture
 
 - `daemon/` — the ring. `src/main.c` single binary: Wayland layer-shell
-  overlay (click-through, top layer, one surface per output) + niri IPC client
-  (event-stream push, line-based JSON) + control socket for toggle.
-  Invariant: **the daemon never polls the pointer; positions arrive as
-  event-stream push.** Invariant: empty input region — clicks always pass
-  through.
+  overlay (click-through, top layer, one surface per output, ×2 supersampled
+  shm double buffers, bbox-only damage) + niri IPC client (event-stream
+  push, line-based JSON) + control socket for the CLI. Invariants:
+  **the daemon never polls the pointer** (positions arrive as push),
+  **empty input region** (clicks always pass through), **no writes to the
+  IPC socket after subscribing** (niri stops reading event-stream clients;
+  see ADR 0005).
 - `niri-patch/` — patch series against a pinned upstream niri tag. Smallest
   possible diff; every patch must stay PR-ready for upstream niri.
-- `protocol/` — vendored Wayland protocol XML the daemon is built against.
+  GPL-3.0-or-later (niri's license); everything else in the repo is MIT.
+- `protocol/` — vendored Wayland protocol XML, verbatim from upstream
+  (wayland-protocols crates). Never hand-trim: request opcodes are
+  positional.
 - `docs/` — plan (the contract), ADRs (immutable decisions), doc map in
   `docs/README.md`.
 
 ## Conventions
 
-- C11, gcc, no deps beyond `libwayland-client` (+ `libxkbcommon` never needed
-  here). No cairo/egl — rings are drawn as AA math into shm buffers.
+- C11, gcc, no deps beyond `libwayland-client`. No cairo/egl — rings are
+  AA math into shm buffers. Zero-warning builds (`-Werror`).
 - Conventional Commits, lowercase imperative, why-body wrapped ~72 cols.
-- One commit per milestone; docs written backwards onto the work (plan ticks +
-  "notes (implemented)" after each milestone).
-- Config file: `~/.config/ringworm/ringworm.conf`, key=value, safe defaults.
+- One commit per milestone; docs written backwards onto the work (plan ticks
+  + "notes (implemented)" after each milestone).
+- Config file: `~/.config/ringworm/ringworm.conf`, key=value, safe defaults,
+  `#` comments.
 
 ## Commits
 
 `type(scope): summary` — types: feat, fix, docs, chore, build. Scope mirrors
-top-level dirs (`daemon`, `niri-patch`, `docs`). The subject is the what, the
-body is the why.
+top-level dirs (`daemon`, `niri-patch`, `scripts`, `docs`). The subject is
+the *what*, the body is the *why*.

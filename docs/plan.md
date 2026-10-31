@@ -79,6 +79,17 @@ never leaves a lying ring on screen.
 | M4 | Toggle + autostart + robustness | Shift+F12 toggles; survives output hotplug (HDMI script); feed-stall fades ring; single instance enforced |
 | M5 | Open-source polish | MIT license, README with demo GIF, `scripts/build-niri.sh` reproducible against pinned tag, patch series PR-ready |
 
+### notes (implemented, M5 polish)
+
+- License split: the daemon/scripts/docs are MIT, but `niri-patch/` is a
+  derivative of niri (GPL-3.0) and ships as GPL-3.0-or-later with niri's
+  license text copied in. Vendored protocol XMLs keep their inline permissive
+  licenses. A root `LICENSE` documents the scope of each.
+- Daemon and virtmouse now build `-Werror` clean; unix-socket paths are
+  bounds-checked (the old snprintf pattern warned on every build).
+- Demo GIF still owed for the public release; everything else in the M5
+  acceptance line is done.
+
 ### notes (implemented, M1+M2 core)
 
 - M1 ✅ patch series builds clean against v26.04; `niri msg cursor-position`
