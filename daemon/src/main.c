@@ -48,12 +48,11 @@ struct config {
 	uint32_t color;  /* 0xRRGGBB */
 	int alpha;       /* percent of full opacity */
 	int fade_ms;     /* fade in/out duration */
-	int stale_ms;    /* feed without traffic for this long -> fade out */
 };
 
 static struct config cfg = {
 	.radius = 26, .thickness = 5, .glow = 9,
-	.color = 0xffb000, .alpha = 90, .fade_ms = 150, .stale_ms = 3000,
+	.color = 0xffb000, .alpha = 90, .fade_ms = 150,
 };
 
 static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -64,7 +63,6 @@ static void cfg_apply(const char *key, const char *val) {
 	else if (!strcmp(key, "glow")) cfg.glow = clampi(atoi(val), 0, 200);
 	else if (!strcmp(key, "alpha")) cfg.alpha = clampi(atoi(val), 1, 100);
 	else if (!strcmp(key, "fade_ms")) cfg.fade_ms = clampi(atoi(val), 0, 2000);
-	else if (!strcmp(key, "stale_ms")) cfg.stale_ms = clampi(atoi(val), 50, 10000);
 	else if (!strcmp(key, "color")) {
 		char *end = NULL;
 		unsigned long v = strtoul(val, &end, 16);
@@ -196,7 +194,6 @@ static bool g_fake;               /* --fake: sine-wave position for demos/tests 
 static double g_alpha = 0.0;      /* animated 0..1 */
 static double g_px, g_py;         /* latest global logical position */
 static bool g_pos_valid;
-static double g_last_feed_ms = -1e9;  /* last byte of life from the feed */
 static double g_last_render_ms = -1e9;
 static bool g_force_render = true;
 
@@ -535,11 +532,13 @@ static double ipc_retry_at = 0;
 static bool ipc_stream_ready;      /* got the initial reply */
 static char ipc_line[8192];
 static size_t ipc_line_len;
-static double ipc_last_ping_ms;
+static int ipc_connect_failures;   /* failed connects before env fallback */
 
 static bool ipc_socket_path(char *path, size_t cap) {
 	const char *env = getenv("NIRI_SOCKET");
-	if (env && *env) { snprintf(path, cap, "%s", env); return true; }
+	/* After repeated failed connects the env path is stale (e.g. compositor
+	 * restarted): fall through to discovery instead of retrying it forever. */
+	if (env && *env && ipc_connect_failures < 3) { snprintf(path, cap, "%s", env); return true; }
 	const char *runtime = getenv("XDG_RUNTIME_DIR");
 	if (!runtime || !*runtime) return false;
 	/* scan $XDG_RUNTIME_DIR for niri.*.sock, newest wins */
@@ -582,6 +581,8 @@ static void ipc_connect(void) {
 	struct sockaddr_un addr = { .sun_family = AF_UNIX };
 	snprintf(addr.sun_path, sizeof addr.sun_path, "%s", path);
 	if (connect(fd, (struct sockaddr *)&addr, sizeof addr) < 0) {
+		if (++ipc_connect_failures % 5 == 1)
+			logv("ipc connect to %s failed: %s\n", path, strerror(errno));
 		close(fd);
 		ipc_retry_at = mono_ms() + 1000;
 		return;
@@ -595,14 +596,12 @@ static void ipc_connect(void) {
 }
 
 static void ipc_process_line(const char *line) {
-	double now = mono_ms();
 	if (strstr(line, "CursorPositionChanged")) {
 		const char *ev = js_field(line, "CursorPositionChanged");
 		if (ev) {
 			const char *p = js_field(ev, "position");
 			if (p && js_pair(p, &g_px, &g_py)) {
 				g_pos_valid = true;
-				g_last_feed_ms = now;
 				return;
 			}
 		}
@@ -613,7 +612,6 @@ static void ipc_process_line(const char *line) {
 			if (p && js_pair(p, &g_px, &g_py)) {
 				g_pos_valid = true;
 				ipc_stream_ready = true;
-				g_last_feed_ms = now;
 				logv("ipc position %.1f,%.1f; subscribing to event stream\n", g_px, g_py);
 				static const char sub[] = "\"EventStream\"\n";
 				ssize_t rc = write(ipc_fd, sub, sizeof sub - 1);
@@ -626,18 +624,16 @@ static void ipc_process_line(const char *line) {
 		ipc_disconnect();
 		return;
 	}
-	/* any other line (Version heartbeat replies, other events) = feed alive */
-	g_last_feed_ms = now;
+	/* other lines (state snapshots, unrelated events) are ignored */
 }
 
 static void ipc_pump(void) {
 	if (ipc_fd < 0) { ipc_connect(); return; }
-	/* heartbeat ping so a resting cursor doesn't look like a dead feed */
-	double now = mono_ms();
-	if (now - ipc_last_ping_ms > 1000) {
-		static const char ping[] = "\"Version\"\n";
-		if (write(ipc_fd, ping, sizeof ping - 1) > 0) ipc_last_ping_ms = now;
-	}
+	/* NOTE: no heartbeats. niri stops reading requests from event-stream
+	 * clients once subscribed, so anything we write piles up until the send
+	 * buffer wedges (~5 min of pings). The event stream itself is the
+	 * liveness signal: a dead compositor closes the socket and the read
+	 * loop sees EOF immediately. */
 	char tmp[4096];
 	ssize_t n;
 	while ((n = read(ipc_fd, tmp, sizeof tmp)) > 0) {
@@ -735,10 +731,9 @@ static void ctl_pump(void) {
 		ctl_reply(c, "reloaded\n");
 	} else if (!strcmp(cmd, "status")) {
 		char buf[256];
-		double age = mono_ms() - g_last_feed_ms;
 		snprintf(buf, sizeof buf, "state=%s feed=%s pos=%.1f,%.1f outputs=%d\n",
 			g_enabled ? "on" : "off",
-			ipc_fd >= 0 && age < cfg.stale_ms ? "live" : "stale",
+			ipc_fd >= 0 ? "live" : "disconnected",
 			g_px, g_py, output_count);
 		ctl_reply(c, buf);
 	} else if (!strcmp(cmd, "stop")) {
@@ -872,7 +867,7 @@ int main(int argc, char **argv) {
 			g_px = 960 + cos(t * 1.7) * 420.0;
 			g_py = 540 + sin(t * 1.3) * 260.0;
 			g_pos_valid = true;
-			g_last_feed_ms = now;
+			g_force_render = true;
 		}
 
 		/* outputs added later (hotplug) get their layer surfaces here */
@@ -885,9 +880,9 @@ int main(int argc, char **argv) {
 		}
 		if (need_flush) wl_display_flush(disp);
 
-		/* staleness watchdog: fade instead of freeze */
-		double target = (g_enabled && g_pos_valid &&
-			now - g_last_feed_ms < cfg.stale_ms) ? 1.0 : 0.0;
+		/* liveness = the connection itself: EOF on compositor death, no
+		 * time-based staleness. A resting cursor must not fade the ring. */
+		double target = (g_enabled && g_pos_valid && ipc_fd >= 0) ? 1.0 : 0.0;
 		double prev = g_alpha;
 		if (cfg.fade_ms <= 0) {
 			g_alpha = target;
