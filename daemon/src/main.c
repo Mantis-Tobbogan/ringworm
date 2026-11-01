@@ -9,8 +9,9 @@
  * Design invariants (docs/adr/):
  *  - empty input region: clicks always pass through
  *  - positions arrive as event-stream push; never polled
- *  - a feed that goes silent for >3s (missed heartbeats) fades the ring
- *    instead of freezing it mid-screen; a resting cursor is not staleness
+ *  - liveness is the IPC connection itself (ADR 0005): the socket closing
+ *    is the only "feed died" signal, so a resting cursor never fades the
+ *    ring and the daemon never writes after subscribing
  */
 #define _GNU_SOURCE
 #include <ctype.h>
@@ -20,6 +21,7 @@
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -34,7 +36,12 @@
 #include <unistd.h>
 
 #include "layer-shell.h"
+#include "ring.h"
 #include "wayland-client.h"
+
+#ifndef RINGWORM_VERSION
+#define RINGWORM_VERSION "dev"
+#endif
 
 /* ------------------------------------------------------------------ */
 /* config                                                              */
@@ -57,29 +64,70 @@ struct config {
 	int fade_ms;     /* fade in/out duration */
 };
 
+/* defaults mirror daemon/ringworm.conf.example and the README table */
 static struct config cfg = {
-	.radius = 26, .thickness = 5, .glow = 9,
-	.color = 0xffb000, .alpha = 90, .fade_ms = 150,
+	.radius = 16, .thickness = 3, .glow = 6,
+	.color = 0xffb000, .alpha = 70, .fade_ms = 150,
 };
 
-static int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
+/* Config problems are collected instead of printed: the daemon's stderr is
+ * usually a session log nobody reads, while `ringworm reload` is right in
+ * front of the user. */
+static char cfg_warnings[512];
+
+static void cfg_warn(const char *fmt, ...) {
+	size_t len = strlen(cfg_warnings);
+	if (len >= sizeof cfg_warnings - 2) return;
+	if (len) {
+		cfg_warnings[len++] = ';';
+		cfg_warnings[len++] = ' ';
+		cfg_warnings[len] = '\0';
+	}
+	va_list ap;
+	va_start(ap, fmt);
+	vsnprintf(cfg_warnings + len, sizeof cfg_warnings - len, fmt, ap);
+	va_end(ap);
+}
+
+static void cfg_int(const char *key, const char *val, int lo, int hi, int *dst) {
+	char *end = NULL;
+	long v = strtol(val, &end, 10);
+	if (end == val || *end != '\0') {
+		cfg_warn("%s=%s: not a number", key, val);
+		return;
+	}
+	long c = v < lo ? lo : (v > hi ? hi : v);
+	if (c != v)
+		cfg_warn("%s=%ld: clamped to %ld (allowed %d..%d)", key, v, c, lo, hi);
+	*dst = (int)c;
+}
 
 static void cfg_apply(const char *key, const char *val) {
-	if (!strcmp(key, "radius")) cfg.radius = clampi(atoi(val), 4, 400);
-	else if (!strcmp(key, "thickness")) cfg.thickness = clampi(atoi(val), 1, 100);
-	else if (!strcmp(key, "glow")) cfg.glow = clampi(atoi(val), 0, 200);
-	else if (!strcmp(key, "alpha")) cfg.alpha = clampi(atoi(val), 1, 100);
-	else if (!strcmp(key, "fade_ms")) cfg.fade_ms = clampi(atoi(val), 0, 2000);
+	if (!strcmp(key, "radius")) cfg_int(key, val, 4, 400, &cfg.radius);
+	else if (!strcmp(key, "thickness")) cfg_int(key, val, 1, 100, &cfg.thickness);
+	else if (!strcmp(key, "glow")) cfg_int(key, val, 0, 200, &cfg.glow);
+	else if (!strcmp(key, "alpha")) cfg_int(key, val, 1, 100, &cfg.alpha);
+	else if (!strcmp(key, "fade_ms")) cfg_int(key, val, 0, 2000, &cfg.fade_ms);
 	else if (!strcmp(key, "enabled")) {
 		/* the ring stays hidden after boot unless the config or the keybind
 		 * turns it on; accepting several spellings keeps the file friendly */
-		g_enabled = !strcmp(val, "1") || !strcasecmp(val, "yes") ||
-			!strcasecmp(val, "true") || !strcasecmp(val, "on");
-	}
-	else if (!strcmp(key, "color")) {
+		if (!strcmp(val, "1") || !strcasecmp(val, "yes") ||
+			!strcasecmp(val, "true") || !strcasecmp(val, "on"))
+			g_enabled = true;
+		else if (!strcmp(val, "0") || !strcasecmp(val, "no") ||
+			!strcasecmp(val, "false") || !strcasecmp(val, "off"))
+			g_enabled = false;
+		else
+			cfg_warn("enabled=%s: expected yes or no", val);
+	} else if (!strcmp(key, "color")) {
 		char *end = NULL;
 		unsigned long v = strtoul(val, &end, 16);
-		if (end && *end == '\0' && end > val) cfg.color = (uint32_t)(v & 0xffffff);
+		if (end == val || *end != '\0' || v > 0xffffff)
+			cfg_warn("color=%s: expected hex RRGGBB", val);
+		else
+			cfg.color = (uint32_t)v;
+	} else {
+		cfg_warn("unknown key \"%s\"", key);
 	}
 }
 
@@ -87,6 +135,7 @@ static void cfg_load(void) {
 	const char *xdg = getenv("XDG_CONFIG_HOME");
 	const char *home = getenv("HOME");
 	char path[512];
+	cfg_warnings[0] = '\0';
 	if (xdg && *xdg)
 		snprintf(path, sizeof path, "%s/ringworm/ringworm.conf", xdg);
 	else if (home && *home)
@@ -117,6 +166,7 @@ static void cfg_load(void) {
 	}
 	fclose(f);
 	logv("config loaded from %s\n", path);
+	if (cfg_warnings[0]) loge("config: %s\n", cfg_warnings);
 }
 
 /* ------------------------------------------------------------------ */
@@ -296,57 +346,6 @@ static void clear_rect(struct wbuf *b, int x1, int y1, int x2, int y2) {
 	}
 }
 
-static void draw_ring(struct wbuf *b, double cx, double cy,
-	int x1, int y1, int x2, int y2, double alpha) {
-	if (alpha <= 0.004) return;
-	double rr = cfg.radius * 2.0, tt = cfg.thickness * 2.0, gg = cfg.glow * 2.0;
-	if (gg < 1.0) gg = 1.0;
-	double cr = ((cfg.color >> 16) & 255) / 255.0;
-	double cg = ((cfg.color >> 8) & 255) / 255.0;
-	double cb = (cfg.color & 255) / 255.0;
-	double inv2g2 = 1.0 / (2.0 * gg * gg);
-
-	for (int y = y1; y < y2; y++) {
-		uint32_t *row = (uint32_t *)b->data + (size_t)y * b->w;
-		double dy = y + 0.5 - cy;
-		for (int x = x1; x < x2; x++) {
-			double dx = x + 0.5 - cx;
-			double e = sqrt(dx * dx + dy * dy) - rr;
-			double ae = fabs(e);
-
-			double t = tt * 0.5 + 1.0 - ae;
-			t = t < 0 ? 0 : (t > 1 ? 1 : t);
-			double core = t * t * (3 - 2 * t);          /* smoothstep AA */
-
-			double d2 = ae - (tt * 0.5 + 2.0);
-			if (d2 < 0) d2 = -d2;
-			double dark = 1.8 - d2;
-			dark = (dark < 0 ? 0 : (dark > 1 ? 1 : dark)) * 0.55;
-
-			double glow = exp(-(e * e) * inv2g2) * (e > 0 ? 0.32 : 0.10);
-
-			/* source-over stack: glow, dark contrast, core */
-			double ag = glow * alpha;
-			double ad = dark * alpha * 0.9;
-			double ac = core * alpha;
-			double r = 0, g = 0, b = 0, a = 0;
-			r = cr * ag + r * (1 - ag); g = cg * ag + g * (1 - ag);
-			b = cb * ag + b * (1 - ag); a = ag + a * (1 - ag);
-			r = r * (1 - ad); g = g * (1 - ad); b = b * (1 - ad);
-			a = ad + a * (1 - ad);
-			r = cr * ac + r * (1 - ac); g = cg * ac + g * (1 - ac);
-			b = cb * ac + b * (1 - ac); a = ac + a * (1 - ac);
-
-			uint32_t r8 = (uint32_t)(r * a * 255.0 + 0.5);
-			uint32_t g8 = (uint32_t)(g * a * 255.0 + 0.5);
-			uint32_t b8 = (uint32_t)(b * a * 255.0 + 0.5);
-			uint32_t a8 = (uint32_t)(a * 255.0 + 0.5);
-			row[x] = (a8 > 255 ? 255u : a8) << 24 | (r8 & 255) << 16 |
-				(g8 & 255) << 8 | (b8 & 255);
-		}
-	}
-}
-
 static void render_output(struct output *o) {
 	if (!o->configured || !o->buf[0].wl) return;
 	int i = o->cur;
@@ -356,7 +355,11 @@ static void render_output(struct output *o) {
 	double A = g_alpha * cfg.alpha / 100.0;
 	double cx = (g_px - o->x) * 2.0;
 	double cy = (g_py - o->y) * 2.0;
-	int half = (cfg.radius + cfg.thickness + cfg.glow + 3) * 2;
+	struct ring_style style = {
+		.radius = cfg.radius, .thickness = cfg.thickness,
+		.glow = cfg.glow, .color = cfg.color,
+	};
+	int half = ring_extent(&style) * 2;
 	int nx1 = (int)floor(cx) - half, ny1 = (int)floor(cy) - half;
 	int nx2 = (int)floor(cx) + half + 1, ny2 = (int)floor(cy) + half + 1;
 
@@ -371,7 +374,8 @@ static void render_output(struct output *o) {
 	int ax2 = nx2 > b->w ? b->w : nx2, ay2 = ny2 > b->h ? b->h : ny2;
 	bool drew = false;
 	if (ax2 > ax1 && ay2 > ay1 && A > 0.004) {
-		draw_ring(b, cx, cy, ax1, ay1, ax2, ay2, A);
+		ring_draw((uint32_t *)b->data, b->w, &style, cx, cy, A,
+			ax1, ay1, ax2, ay2);
 		drew = true;
 	}
 
@@ -726,6 +730,10 @@ static void ctl_listen(void) {
 		}
 	}
 	if (listen(fd, 4) < 0) { close(fd); return; }
+	/* $XDG_RUNTIME_DIR is already 0700; this keeps the socket private even if
+	 * someone loosens it or points XDG_RUNTIME_DIR at a shared directory. */
+	if (chmod(ctl_path, 0600) < 0)
+		logv("chmod %s: %s\n", ctl_path, strerror(errno));
 	ctl_fd = fd;
 	logv("control socket: %s\n", ctl_path);
 }
@@ -758,13 +766,24 @@ static void ctl_pump(void) {
 	} else if (!strcmp(cmd, "reload")) {
 		cfg_load();
 		g_force_render = true;
-		ctl_reply(c, "reloaded\n");
+		if (cfg_warnings[0]) {
+			char buf[600];
+			snprintf(buf, sizeof buf, "reloaded (%s)\n", cfg_warnings);
+			ctl_reply(c, buf);
+		} else {
+			ctl_reply(c, "reloaded\n");
+		}
 	} else if (!strcmp(cmd, "status")) {
+		char pos[32];
+		if (g_pos_valid)
+			snprintf(pos, sizeof pos, "%.1f,%.1f", g_px, g_py);
+		else
+			snprintf(pos, sizeof pos, "none");
 		char buf[256];
-		snprintf(buf, sizeof buf, "state=%s feed=%s pos=%.1f,%.1f outputs=%d\n",
+		snprintf(buf, sizeof buf, "state=%s feed=%s pos=%s outputs=%d\n",
 			g_enabled ? "on" : "off",
-			ipc_fd >= 0 ? "live" : "disconnected",
-			g_px, g_py, output_count);
+			g_fake ? "fake" : (ipc_fd >= 0 ? "live" : "disconnected"),
+			pos, output_count);
 		ctl_reply(c, buf);
 	} else if (!strcmp(cmd, "stop")) {
 		ctl_reply(c, "bye\n");
@@ -809,7 +828,7 @@ static int client_main(const char *cmd) {
 		fputs(reply, stdout);
 	}
 	close(fd);
-	return 0;
+	return n > 0 && !strncmp(reply, "err:", 4) ? 1 : 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -821,18 +840,29 @@ static void on_signal(int s) {
 }
 
 static void usage(FILE *f) {
-	fputs(
-		"ringworm — accessibility ring around the cursor (niri)\n\n"
-		"  ringworm            run the daemon\n"
-		"  ringworm -v         run the daemon with verbose logging\n"
-		"  ringworm toggle|on|off|status|reload|stop   control the daemon\n",
-		f);
+	fprintf(f,
+		"ringworm %s — accessibility ring around the cursor (niri)\n\n"
+		"  ringworm                 run the daemon (autostart it from config.kdl)\n"
+		"  ringworm toggle|on|off   show/hide the ring\n"
+		"  ringworm status          daemon state, feed health, position, outputs\n"
+		"  ringworm reload          re-read ~/.config/ringworm/ringworm.conf\n"
+		"  ringworm stop            shut the daemon down\n\n"
+		"  -v, --verbose            log to stderr\n"
+		"  --fake                   demo mode: sine-wave pointer, no niri IPC,\n"
+		"                           runs alongside the daemon (stop with Ctrl+C)\n"
+		"  -V, --version            print version\n"
+		"  -h, --help               this text\n",
+		RINGWORM_VERSION);
 }
 
 int main(int argc, char **argv) {
 	/* client mode? */
 	for (int i = 1; i < argc; i++) {
 		if (!strcmp(argv[i], "-h") || !strcmp(argv[i], "--help")) { usage(stdout); return 0; }
+		if (!strcmp(argv[i], "-V") || !strcmp(argv[i], "--version")) {
+			printf("ringworm %s\n", RINGWORM_VERSION);
+			return 0;
+		}
 		if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--verbose")) { g_verbose = 1; continue; }
 		if (!strcmp(argv[i], "--fake")) { g_fake = true; g_enabled = true; continue; }
 		if (!strcmp(argv[i], "toggle") || !strcmp(argv[i], "on") || !strcmp(argv[i], "off") ||
@@ -873,8 +903,9 @@ int main(int argc, char **argv) {
 	wl_display_flush(disp);
 	logv("%d outputs overlaid\n", output_count);
 
-	ctl_listen();
-	ipc_connect();
+	/* demo mode owns neither the control socket nor the feed, so it can run
+	 * alongside the real daemon (which keeps answering `ringworm toggle`) */
+	if (!g_fake) { ctl_listen(); ipc_connect(); }
 
 	double last_tick = mono_ms();
 	while (!sig_quit) {
@@ -893,13 +924,18 @@ int main(int argc, char **argv) {
 		double dt = now - last_tick;
 		last_tick = now;
 
-		ipc_pump();
+		if (!g_fake) ipc_pump();
 		ctl_pump();
 
 		if (g_fake) {
+			/* demo mode: a Lissajous pointer, no compositor patch needed */
 			double t = now / 1000.0;
-			g_px = 960 + cos(t * 1.7) * 420.0;
-			g_py = 540 + sin(t * 1.3) * 260.0;
+			struct output *ref = outputs;
+			while (ref && !ref->configured) ref = ref->next;
+			double ow = ref ? ref->w : 1920, oh = ref ? ref->h : 1080;
+			double ox = ref ? ref->x : 0, oy = ref ? ref->y : 0;
+			g_px = ox + ow * (0.5 + 0.32 * cos(t * 1.7));
+			g_py = oy + oh * (0.5 + 0.30 * sin(t * 1.3));
 			g_pos_valid = true;
 			g_force_render = true;
 		}
@@ -916,7 +952,7 @@ int main(int argc, char **argv) {
 
 		/* liveness = the connection itself: EOF on compositor death, no
 		 * time-based staleness. A resting cursor must not fade the ring. */
-		double target = (g_enabled && g_pos_valid && ipc_fd >= 0) ? 1.0 : 0.0;
+		double target = (g_enabled && g_pos_valid && (ipc_fd >= 0 || g_fake)) ? 1.0 : 0.0;
 		double prev = g_alpha;
 		if (cfg.fade_ms <= 0) {
 			g_alpha = target;
