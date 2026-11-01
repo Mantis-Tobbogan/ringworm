@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (C11, -Werror)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libwayland-dev libwayland-bin shellcheck
+
+      - name: Build the daemon
+        run: make -C daemon check
+
+      - name: Smoke-test the CLI
+        run: |
+          ./daemon/ringworm --version
+          ./daemon/ringworm --help
+
+      - name: Build the helper binaries
+        run: make -C scripts
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning scripts/*.sh
+
+  patches:
+    name: niri patch series applies to v26.04
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone the pinned niri tag
+        run: git clone --depth 1 --branch v26.04 https://github.com/YaLTeR/niri.git niri
+
+      - name: Apply the series
+        run: |
+          cd niri
+          git -c user.name=ci -c user.email=ci@example.com \
+            am "$GITHUB_WORKSPACE"/niri-patch/*.patch
+          git log --oneline -5
