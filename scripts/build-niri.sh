@@ -35,4 +35,7 @@ cargo build --release --locked
 
 echo
 echo "patched binary: $DIR/target/release/niri"
-niri --version 2>/dev/null || "$DIR/target/release/niri" --version
+"$DIR/target/release/niri" --version
+echo
+echo "Point your session at it (see README 'Install'), then check with:"
+echo "  niri msg cursor-position"

@@ -8,3 +8,9 @@ scripts/virtual-pointer.*
 *.patch.new
 *.log
 result/
+scripts/*.o
+*.d
+compile_commands.json
+niri-patch/*.orig
+niri-patch/*.rej
+scripts/render-demo
