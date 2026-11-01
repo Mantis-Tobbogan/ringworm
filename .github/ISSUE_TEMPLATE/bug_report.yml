@@ -1,0 +1,65 @@
+name: Bug report
+description: The ring does not appear, tracks wrong, or the daemon misbehaves
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Please do **not** attach screenshots of your
+        desktop or full logs — the fields below are enough to start.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you expected, and what actually happened.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ringworm -v
+        2. press Shift+F12
+        3. move the pointer to the second output
+    validations:
+      required: true
+  - type: input
+    id: ringworm-version
+    attributes:
+      label: ringworm version
+      description: Output of `ringworm --version`
+      placeholder: ringworm 0.2.0
+    validations:
+      required: true
+  - type: input
+    id: niri-version
+    attributes:
+      label: niri version
+      description: Output of `niri msg version` (state whether it is the patched build)
+      placeholder: 26.04 (v26.04-5-g7219174)
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: "`ringworm status` output"
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: Your `~/.config/ringworm/ringworm.conf`, if you changed it
+      render: ini
+    validations:
+      required: false
+  - type: input
+    id: session
+    attributes:
+      label: Session details
+      description: Distribution, output scale(s), number of outputs
+      placeholder: Fedora 43, scale 1.5 + 2.0, 2 outputs
+    validations:
+      required: false

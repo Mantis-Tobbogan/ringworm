@@ -1,0 +1,7 @@
+# Normalise line endings, but keep the vendored protocol XML recognisable as
+# third-party in GitHub's language stats.
+* text=auto eol=lf
+*.patch text eol=lf
+protocol/*.xml linguist-vendored
+docs/media/*.gif binary
+docs/media/*.png binary

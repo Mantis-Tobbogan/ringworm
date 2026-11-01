@@ -7,6 +7,10 @@ Every file answers exactly one kind of question.
 | [plan.md](plan.md) | What are we building, in what order, and what's locked? | implementer + owner |
 | [adr/](adr/) | Why is it built *this* way and not the obvious way? | future maintainers, upstream reviewers |
 | [../README.md](../README.md) | What is this thing? | everyone else |
+| [../CONTRIBUTING.md](../CONTRIBUTING.md) | How do I build, test and submit a change? | contributors |
+| [../SECURITY.md](../SECURITY.md) | How do I report a vulnerability? | security reporters |
+| [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md) | How do we treat each other here? | everyone |
+| [../CHANGELOG.md](../CHANGELOG.md) | What changed, and when? | users, packagers |
 | [../AGENTS.md](../AGENTS.md) | How do agents work in this repo day-to-day? | coding agents |
 
 ## ADR index

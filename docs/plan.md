@@ -54,8 +54,8 @@ upstreamed and the fork can die.
 ```
 
 State machine (daemon): `disabled → enabled → (fade-out) → disabled`.
-Position feed: `live → stale(>200ms no event) → fade ring out` so a dead feed
-never leaves a lying ring on screen.
+Position feed: liveness is the IPC connection itself (ADR 0005) — the socket
+closing drops the ring, a resting cursor is not staleness.
 
 ## Stack
 
@@ -72,12 +72,12 @@ never leaves a lying ring on screen.
 
 | # | Milestone | Acceptance |
 |---|---|---|
-| M0 | Scaffold: repo, docs skeleton, vendored protocol | repo commits cleanly; docs map resolves |
-| M1 | niri patch: cursor position over IPC + event-stream | patched niri builds from clean upstream tag; `niri msg cursor-position` tracks the live pointer; event-stream emits position events |
-| M2 | Daemon renders ring from the feed | `niri msg layers` shows ringworm surfaces on all outputs; ring visibly tracks cursor over every app incl. REAPER; idle CPU ≈ 0 |
-| M3 | Styling + config file | changing radius/color/thickness/glow in `ringworm.conf` + `ringworm reload` visibly changes the ring; bad values rejected with message |
-| M4 | Toggle + autostart + robustness | Shift+F12 toggles; survives output hotplug (HDMI script); feed-stall fades ring; single instance enforced |
-| M5 | Open-source polish | MIT license, README with demo GIF, `scripts/build-niri.sh` reproducible against pinned tag, patch series PR-ready |
+| M0 ✅ | Scaffold: repo, docs skeleton, vendored protocol | repo commits cleanly; docs map resolves |
+| M1 ✅ | niri patch: cursor position over IPC + event-stream | patched niri builds from clean upstream tag; `niri msg cursor-position` tracks the live pointer; event-stream emits position events |
+| M2 ✅ | Daemon renders ring from the feed | `niri msg layers` shows ringworm surfaces on all outputs; ring visibly tracks cursor over every app incl. REAPER; idle CPU ≈ 0 |
+| M3 ✅ | Styling + config file | changing radius/color/thickness/glow in `ringworm.conf` + `ringworm reload` visibly changes the ring; bad values rejected with a message |
+| M4 ✅ | Toggle + autostart + robustness | Shift+F12 toggles; survives output hotplug (HDMI script); feed death drops the ring (ADR 0005); single instance enforced |
+| M5 ✅ | Open-source polish | MIT license, README with demo GIF, `scripts/build-niri.sh` reproducible against pinned tag, patch series PR-ready |
 
 ### notes (implemented, M5 polish)
 
@@ -87,8 +87,15 @@ never leaves a lying ring on screen.
   licenses. A root `LICENSE` documents the scope of each.
 - Daemon and virtmouse now build `-Werror` clean; unix-socket paths are
   bounds-checked (the old snprintf pattern warned on every build).
-- Demo GIF still owed for the public release; everything else in the M5
-  acceptance line is done.
+- Config problems are reported instead of silently clamped: unknown keys,
+  non-numeric values and out-of-range values are listed by `ringworm reload`
+  (and logged at startup), so a typo in `ringworm.conf` is visible.
+- The ring math moved to `daemon/ring.c` (pure functions, no Wayland) so the
+  README media can be rendered offline from exactly what ships.
+- Demo GIF and hero still are generated from the real ring math by
+  `make -C scripts demo` (`scripts/render-demo.c` + ImageMagick), so the
+  README media cannot drift from the renderer and no private desktop ends up
+  in the repo. Everything else in the M5 acceptance line is done.
 
 ### notes (implemented, M1+M2 core)
 
@@ -101,18 +108,21 @@ never leaves a lying ring on screen.
 - Wire-protocol lesson: never hand-trim a Wayland XML — request opcodes are
   positional and get_popup sits mid-sequence. Canonical XML is vendored from
   the wayland-protocols crates; xdg-shell is linked for symbol closure only.
-- Feed liveness redesigned while wiring: a resting cursor produces no events,
-  so liveness is heartbeat-based (ping every 1s, stale at 3s of silence), not
-  event-based. Position events are push-only; the pointer is never polled.
+- ~~Feed liveness was heartbeat-based (ping every 1s, stale at 3s)~~ —
+  superseded by ADR 0005: a resting cursor produces no events, and writes
+  after the event-stream subscription wedge niri's receive queue. Liveness is
+  the connection; no heartbeat, no staleness window. Position events are
+  push-only; the pointer is never polled.
 - Nested-session note: pointer-enter without motion gives a position via the
   request but no event until the first real motion; invisible in practice.
 - The `niri msg event-stream` printer needed an arm for the new event (exhaustive
   match); folded into the cli patch.
 
 Order note: M1 is first after scaffold because it's the only true unknown and
-everything else is testable against it. The daemon has a headless seam (it can
-log positions from the IPC feed with `--no-render`) so M1 acceptance and daemon
-development overlap safely.
+everything else is testable against it. The daemon has a headless seam — `-v`
+logs positions straight from the IPC feed, and `--fake` renders a synthetic
+pointer with no niri patch at all — so M1 acceptance and daemon development
+overlap safely.
 
 ## Risks & mitigations
 
@@ -122,7 +132,7 @@ development overlap safely.
 | Rust toolchain + build deps need sudo | install list prepared; single `dnf install` transaction |
 | niri updates silently break the patch | `scripts/build-niri.sh` pins the tag and fails loudly; upstream PR ends the risk |
 | Ring lags at fractional scale / multi-output | ×2 supersampled buffers; per-output surfaces; HDMI hotplug tested (owner has a toggle script) |
-| Event feed stalls (patch regression) | staleness watchdog fades the ring instead of freezing it mid-screen |
+| Event feed stalls (patch regression) | the compositor closing the socket drops the ring; a hung compositor is accepted (ADR 0005) |
 
 ## Locked decisions
 
